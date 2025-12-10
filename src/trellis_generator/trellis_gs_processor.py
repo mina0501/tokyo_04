@@ -53,7 +53,6 @@ class GaussianProcessor:
 
         outputs = self._image_to_3d_pipeline.run(
             image_no_bg,
-            mode=get_config("trellis_multi_mode"),
         )
         self.gaussians = outputs["gaussian"][0]
 
