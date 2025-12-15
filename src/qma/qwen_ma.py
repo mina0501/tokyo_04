@@ -1,12 +1,13 @@
 from io import BytesIO
 import random
 from typing import Optional, Tuple, List
-
+from time import time
 import numpy as np
 import torch
 from PIL import Image
 import sys
 import os
+from loguru import logger
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from qma.qwenimage.pipeline_qwenimage_edit_plus import QwenImageEditPlusPipeline
 from qma.qwenimage.transformer_qwenimage import QwenImageTransformer2DModel
@@ -26,19 +27,40 @@ class QwenMultiAngle:
             ),
             torch_dtype=self.dtype
         ).to(self.device)
+
+        # self.pipe.load_lora_weights(
+        #     "dx8152/Qwen-Edit-2509-Multiple-angles",
+        #     weight_name="镜头转换.safetensors",
+        #     adapter_name="angles",
+        # )
+        # self.pipe.set_adapters(["angles"], adapter_weights=[1.0])
+        # self.pipe.fuse_lora(adapter_names=["angles"], lora_scale=1.25)
+        # self.pipe.unload_lora_weights()
+
+        self.load_lora_weights()
+        self.pipe.transformer.__class__ = QwenImageTransformer2DModel
+
+    def load_lora_weights(self):
+        if hasattr(self, 'loaded_lora') and self.loaded_lora:
+            return
+        t0 = time()
         self.pipe.load_lora_weights(
             "dx8152/Qwen-Edit-2509-Multiple-angles",
             weight_name="镜头转换.safetensors",
             adapter_name="angles",
         )
-
-
         self.pipe.set_adapters(["angles"], adapter_weights=[1.0])
-        self.pipe.fuse_lora(adapter_names=["angles"], lora_scale=1.25)
-        self.pipe.unload_lora_weights()
+        self.loaded_lora = True
+        logger.info(f"LoRA weights loaded in {time() - t0:.2f} seconds.")
+        
 
-        self.pipe.transformer.__class__ = QwenImageTransformer2DModel
-        # self.pipe.transformer.set_attn_processor(QwenDoubleStreamAttnProcessorFA3())
+    def unload_lora(self):
+        if not hasattr(self, 'loaded_lora') or not self.loaded_lora:
+            return
+        t0 = time()
+        self.pipe.unload_lora_weights()
+        self.loaded_lora = False
+        logger.info(f"LoRA weights unloaded in {time() - t0:.2f} seconds.")
 
     def _build_camera_prompt(
         self,
@@ -109,7 +131,7 @@ class QwenMultiAngle:
 
     def infer_single_image(
         self,
-        image: Optional[Image.Image] = None,
+        image: Image.Image,
         rotate_deg: float = 0.0,
         move_forward: float = 0.0,
         vertical_tilt: float = 0.0,
@@ -209,7 +231,7 @@ class QwenMultiAngle:
 
     def infer_repeat_images(
         self,
-        image: Optional[Image.Image] = None,
+        image: Image.Image,
         rotate_deg: float = 0.0,
         move_forward: float = 0.0,
         vertical_tilt: float = 0.0,
@@ -224,6 +246,7 @@ class QwenMultiAngle:
         Applies a camera-style transformation (rotation, zoom, tilt, lens)
         to an input image.
         """
+        self.load_lora_weights()
         if n_views < 1: return []
         output = [image.copy()]
         for _ in range(n_views):
@@ -231,3 +254,24 @@ class QwenMultiAngle:
             result, seed, prompt = self.infer_single_image(image, rotate_deg, move_forward, vertical_tilt, wideangle, seed, randomize_seed)
             output.append(result.copy())
         return output[1:] # return the results without the original image
+    
+    def enhance_image(self, image: Image.Image, seed: int = -1) -> Image.Image:
+        """
+        Perform a normal image edit without camera angle changes.
+        """
+        self.unload_lora()
+        if seed < 0:
+            seed = random.randint(0, MAX_SEED)
+        generator = torch.Generator(device=self.device).manual_seed(seed)
+        prompt = "Show this object in three-quarters view and make sure it is fully visible. Turn background neutral solid color contrasting with an object. Delete background details. Delete watermarks. Keep object colors. Sharpen image details"
+        negative_prompt = "NSFW, (worst quality:2), (low quality:2), (normal quality:2), multiple objects, complex background, environmental scene, dramatic lighting, shadows, artistic style, painterly, sketchy, conceptual art, abstract, cropped object, partial view, occluded features, blurry, motion blur, depth of field, bokeh, (monochrome), (grayscale), (skin blemishes:1.331), (acne:1.331), (age spots:1.331), (extra fingers:1.61051), (deformed limbs:1.331), (malformed limbs:1.331), (ugly:1.331), (poorly drawn hands:1.5), (poorly drawn feet:1.5), (poorly drawn face:1.5), (mutated hands:1.331), (bad anatomy:1.21), (distorted face:1.331), (disfigured:1.331), (low contrast), (underexposed), (overexposed), (amateur), (blurry), (bad proportions:1.331), (extra limbs:1.331), (fused fingers:1.61051), (unclear edges:1.331)"
+        edited_image = self.pipe(
+            image=[image.convert("RGB")],
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            num_inference_steps=4,
+            generator=generator,
+            true_cfg_scale=1.0,
+            num_images_per_prompt=1,
+        ).images[0]
+        return edited_image

@@ -5,7 +5,6 @@ import sys
 from io import BytesIO
 from time import time
 from datetime import datetime
-from pathlib import Path
 from PIL import Image
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
@@ -14,7 +13,6 @@ from contextlib import asynccontextmanager
 import ray
 import torch
 import numpy as np
-from typing import Annotated
 from loguru import logger
 from fastapi import FastAPI,  UploadFile, File, APIRouter, Form
 from fastapi.responses import Response, StreamingResponse
@@ -33,7 +31,7 @@ os.environ['ATTN_BACKEND'] = 'flash-attn'
 
 
 def save_image(image: Image.Image, postfix: str) -> None:
-    debug = get_config("debug_mode") or 0
+    debug = get_config("save_image") or 0
     """ Function for saving the image. """
     if debug == 0:
         return
@@ -57,7 +55,7 @@ class MyFastAPI(FastAPI):
 @asynccontextmanager
 async def lifespan(app: MyFastAPI) -> AsyncIterator[None]:
     """ Function that loading all models and warming up the generation."""
-    major, minor = torch.cuda.get_device_capability(0)
+    major, _ = torch.cuda.get_device_capability(0)
 
     if major == 9:
         vllm_flash_attn_backend = "FLASH_ATTN"
@@ -66,7 +64,6 @@ async def lifespan(app: MyFastAPI) -> AsyncIterator[None]:
 
     try:
         logger.info("Loading models...")
-
         # Load Trellis generator
         gen3d_model = get_config("gen3d_model")
         if gen3d_model == "trellis":
@@ -91,17 +88,16 @@ async def lifespan(app: MyFastAPI) -> AsyncIterator[None]:
 
         # Load renderer for 2x2 grid rendering
         app.state.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        if get_config("debug_mode"):
+        if get_config("save_render"):
             from renderers.gs_renderer.renderer import Renderer
             from renderers.ply_loader import PlyLoader
 
             app.state.renderer = Renderer()
             app.state.ply_loader = PlyLoader()
 
-        if get_config("num_views") > 0:
-            # Load Qwen multi angle
-            from qma.qwen_ma import QwenMultiAngle
-            app.state.qma = QwenMultiAngle()
+        # Load Qwen edit
+        from qma.qwen_ma import QwenMultiAngle
+        app.state.qma = QwenMultiAngle()
 
 
         clean_vram()
@@ -188,8 +184,16 @@ def generation_block(
 ) -> BytesIO:
     """ Function for 3D data generation using provided image"""
 
-    images = [prompt_image]
+    if get_config("enhance_image") > 0: # enhance mode
+        save_image(prompt_image, "raw")
+        t_enhance_start = time()
+        enhanced_image = app.state.qma.enhance_image(prompt_image, seed)
+        if enhanced_image is not None:
+            prompt_image = enhanced_image
+            t_enhance_end = time()
+            logger.debug(f"Enhance image took: {(t_enhance_end - t_enhance_start):.3f} secs.")
 
+    images = [prompt_image]
     # Generate multiview images if n_views > 0
     if get_config("num_views") > 0:
         # Generate multiview images
@@ -199,11 +203,15 @@ def generation_block(
         t_multiview_end = time()
         logger.debug(f"Multiview generation took: {(t_multiview_end - t_multiview_start):.3f} secs.")
 
+
     # Remove background for all images
     images_no_bg = []
     t_bg_remove_start = time()
     for idx, img in enumerate(images):
-        prefix = "raw" if idx == 0 else f"mv{idx}"
+        if idx == 0:
+            prefix = "enhanced" if get_config("enhance_image") > 0 else "raw"
+        else:
+            prefix = f"mv{idx}"
         has_alpha = img.mode in ("LA", "RGBA", "PA")
         if not has_alpha:
             img_no_bg = remove_background(img, seed, prefix=prefix)
@@ -226,7 +234,7 @@ def generation_block(
     return buffer
 
 def _save_render_image(buffer: BytesIO):
-    debug = get_config("debug_mode")
+    debug = get_config("save_render")
     """ Function for rendering 2x2 grid directly using Renderer instance. """
     if debug == 0:
         return

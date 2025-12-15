@@ -4,5 +4,7 @@ trellis_multi_mode: multidiffusion
 # gen3d_model: trellis
 # trellis_multi_mode: stochastic
 
-debug_mode: 0
-num_views: 2
+save_image: 1
+save_render: 0
+enhance_image: 1
+num_views: 1
