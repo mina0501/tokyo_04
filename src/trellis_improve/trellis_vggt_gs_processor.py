@@ -5,6 +5,7 @@ import numpy as np
 from PIL import Image
 
 from config import get_config
+from loguru import logger
 from trellis_improve.trellis.pipelines import TrellisVGGTTo3DPipeline
 from background_remover.utils.rand_utils import secure_randint, set_random_seed
 from trellis_improve.trellis.representations.gaussian import Gaussian
@@ -47,9 +48,10 @@ class TrellisVGGTGaussianProcessor:
         outputs = self._image_to_3d_pipeline.run(
             [image_no_bg],
             num_samples=1,
-            sparse_structure_sampler_params={"steps": 30, "cfg_strength": 7.5},
-            slat_sampler_params={"steps": 25, "cfg_strength": 3},
+            sparse_structure_sampler_params={"steps": 8, "cfg_strength": 5.75},
+            slat_sampler_params={"steps": 20, "cfg_strength": 2.4},
             mode=get_config("trellis_multi_mode"),
+            preprocess_image=False,
         )
         self.gaussians = outputs["gaussian"][0]
 
@@ -74,14 +76,15 @@ class TrellisVGGTGaussianProcessor:
         else:
             set_random_seed(seed)
 
-        images_no_bg = [self._image_to_3d_pipeline.preprocess_image(image) for image in images_no_bg]
+        # images_no_bg = [self._image_to_3d_pipeline.preprocess_image(image) for image in images_no_bg]
 
         outputs = self._image_to_3d_pipeline.run(
             images_no_bg,
             num_samples=1,
-            sparse_structure_sampler_params={"steps": 30, "cfg_strength": 7.5},
-            slat_sampler_params={"steps": 25, "cfg_strength": 3},
+            sparse_structure_sampler_params={"steps": 8, "cfg_strength": 5.75},
+            slat_sampler_params={"steps": 20, "cfg_strength": 2.4},
             mode=get_config("trellis_multi_mode"),
+            preprocess_image=False,
         )
 
         base_gaussian: Gaussian = outputs["gaussian"][0]
@@ -91,3 +94,16 @@ class TrellisVGGTGaussianProcessor:
         buffer.seek(0)
 
         return buffer
+
+    def select_coords(self, coords, num_samples):
+        """
+        Select n smallest sparse structures in terms of number of voxels
+        """
+        counts = coords[:,0].unique(return_counts=True)[-1]
+        selected_coords = sorted(coords[:,1:].split(tuple(counts.tolist())), key = lambda x: len(x))[:num_samples]
+        sizes = torch.tensor(tuple(len(coo) for coo in selected_coords))
+        selected_coords = torch.cat(selected_coords, dim=0)
+        indices = torch.arange(num_samples).repeat_interleave(sizes).unsqueeze(-1).to(selected_coords.device, selected_coords.dtype)
+        selected_coords = torch.cat((indices, selected_coords), dim=1)
+        logger.info(f"Selected {num_samples}, indices: {indices.shape}, selected_coords: {selected_coords.shape}")
+        return selected_coords

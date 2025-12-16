@@ -9,6 +9,7 @@ from torchvision import transforms
 from .base import Pipeline
 from . import samplers
 from ..modules import sparse as sp
+from loguru import logger
 
 
 class TrellisImageTo3DPipeline(Pipeline):
@@ -239,7 +240,7 @@ class TrellisImageTo3DPipeline(Pipeline):
         sparse_structure_sampler_params: dict = {},
         slat_sampler_params: dict = {},
         formats: List[str] = ['mesh', 'gaussian'],
-        preprocess_image: bool = True,
+        preprocess_image: bool = False,
     ) -> dict:
         """
         Run the pipeline.
@@ -258,7 +259,7 @@ class TrellisImageTo3DPipeline(Pipeline):
         # torch.manual_seed(seed)
 
         coords = self.sample_sparse_structure(cond, num_samples, sparse_structure_sampler_params)
-        coords = coords if num_samples == 1 else self.select_coords(coords, num_samples)
+        coords = coords if num_samples == 1 else self.select_coords(coords, 1)
         slat = self.sample_slat(cond, coords, slat_sampler_params)
         return self.decode_slat(slat, formats)
 
@@ -327,8 +328,8 @@ class TrellisImageTo3DPipeline(Pipeline):
         # seed: int = 42,
         sparse_structure_sampler_params: dict = {},
         slat_sampler_params: dict = {},
-        formats: List[str] = ['mesh', 'gaussian'],
-        preprocess_image: bool = True,
+        formats: List[str] = ['gaussian'],
+        preprocess_image: bool = False,
         mode: Literal['stochastic', 'multidiffusion'] = 'stochastic',
     ) -> dict:
         """
@@ -348,7 +349,8 @@ class TrellisImageTo3DPipeline(Pipeline):
         ss_steps = {**self.sparse_structure_sampler_params, **sparse_structure_sampler_params}.get('steps')
         with self.inject_sampler_multi_image('sparse_structure_sampler', len(images), ss_steps, mode=mode):
             coords = self.sample_sparse_structure(cond, num_samples, sparse_structure_sampler_params)
-            coords = coords if num_samples == 1 else self.select_coords(coords, num_samples)
+            coords = coords if num_samples == 1 else self.select_coords(coords, 1)
+
         slat_steps = {**self.slat_sampler_params, **slat_sampler_params}.get('steps')
         with self.inject_sampler_multi_image('slat_sampler', len(images), slat_steps, mode=mode):
             slat = self.sample_slat(cond, coords, slat_sampler_params)
@@ -365,4 +367,5 @@ class TrellisImageTo3DPipeline(Pipeline):
         selected_coords = torch.cat(selected_coords, dim=0)
         indices = torch.arange(num_samples).repeat_interleave(sizes).unsqueeze(-1).to(selected_coords.device, selected_coords.dtype)
         selected_coords = torch.cat((indices, selected_coords), dim=1)
+        logger.info(f"Selected {num_samples}, indices: {indices.shape}, selected_coords: {selected_coords.shape}")
         return selected_coords

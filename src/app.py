@@ -19,10 +19,7 @@ from fastapi.responses import Response, StreamingResponse
 from starlette.datastructures import State
 
 sys.path.insert(0, os.path.abspath('src'))
-from background_remover.ray_bg_remover import RayBGRemoverProcessor
-from background_remover.bg_removers.ben2_bg_remover import Ben2BGRemover
-from background_remover.bg_removers.birefnet_bg_remover import BiRefNetBGRemover
-from background_remover.image_selector import ImageSelector
+from background_remover.rmbg2 import BackgroundRemovalService
 from config import get_config
 
 
@@ -55,13 +52,6 @@ class MyFastAPI(FastAPI):
 @asynccontextmanager
 async def lifespan(app: MyFastAPI) -> AsyncIterator[None]:
     """ Function that loading all models and warming up the generation."""
-    major, _ = torch.cuda.get_device_capability(0)
-
-    if major == 9:
-        vllm_flash_attn_backend = "FLASH_ATTN"
-    else:
-        vllm_flash_attn_backend = "FLASHINFER"
-
     try:
         logger.info("Loading models...")
         # Load Trellis generator
@@ -76,15 +66,8 @@ async def lifespan(app: MyFastAPI) -> AsyncIterator[None]:
         app.state.trellis_generator.load_models()
 
         # Load background removers
-        app.state.bg_removers_workers = [
-            RayBGRemoverProcessor.remote(Ben2BGRemover),
-            RayBGRemoverProcessor.remote(BiRefNetBGRemover),
-        ]
-
-        # Load image selector
-        image_shape = (int(1024 / 2), int(1024 / 2), 3)
-        app.state.vlm_image_selector = ImageSelector(3, image_shape, vllm_flash_attn_backend)
-        app.state.vlm_image_selector.load_model()
+        app.state.bg_remover = BackgroundRemovalService()
+        app.state.bg_remover.startup()
 
         # Load renderer for 2x2 grid rendering
         app.state.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -129,35 +112,10 @@ def clean_vram() -> None:
     torch.cuda.empty_cache()
 
 
-def remove_background(image: Image.Image, seed: int, prefix: str = "") -> Image.Image:
+def remove_background(image: Image.Image) -> Image.Image:
     """ Function for removing background from the image. """
-    num_bg_remove = get_config("num_bg_remove")
-    futurs = [worker.run.remote(image) for worker in app.state.bg_removers_workers[:num_bg_remove]]
-    results = ray.get(futurs)
-
-    image0 = results[0]
-    output_image = results[0]
-    image_ind = 0
-    if len(results) > 1:
-        image0 = results[0]
-        image1 = results[1]
-        output_image, image_ind = app.state.vlm_image_selector.select_with_image_selector(image0, image1, image, seed)
-
-    save_image(image, f"{prefix}")
-    # rename picked image
-    if image_ind == 0:
-        save_image(image0, f"{prefix}_bgrm_0_win")
-        if num_bg_remove > 1:
-            save_image(image1, f"{prefix}_bgrm_1")
-    elif image_ind == 1:
-        save_image(image0, f"{prefix}_bgrm_0")
-        if num_bg_remove > 1:
-            save_image(image1, f"{prefix}_bgrm_1_win")
-    else:
-        save_image(image0, f"{prefix}_bgrm_0")
-        if num_bg_remove > 1:
-            save_image(image1, f"{prefix}_bgrm_1")
-    return output_image
+    image_no_bg = app.state.bg_remover.remove_background(image)
+    return image_no_bg
 
 
 def _generate_multiview_images(
@@ -200,6 +158,7 @@ def generation_block(
         enhanced_image = app.state.qma.enhance_image(prompt_image, seed)
         if enhanced_image is not None:
             prompt_image = enhanced_image
+            save_image(prompt_image, "enhanced")
             t_enhance_end = time()
             logger.debug(f"Enhance image took: {(t_enhance_end - t_enhance_start):.3f} secs.")
 
@@ -218,15 +177,9 @@ def generation_block(
     images_no_bg = []
     t_bg_remove_start = time()
     for idx, img in enumerate(images):
-        if idx == 0:
-            prefix = "enhanced" if get_config("enhance_image") > 0 else "raw"
-        else:
-            prefix = f"mv{idx}"
-        has_alpha = img.mode in ("LA", "RGBA", "PA")
-        if not has_alpha:
-            img_no_bg = remove_background(img, seed, prefix=prefix)
-        else:
-            img_no_bg = img
+        img_no_bg = remove_background(img)
+        if idx > 0:
+            save_image(img_no_bg, f"mv{idx}")
         images_no_bg.append(img_no_bg)
     t_bg_remove_end = time()
     logger.debug(f"Background removal for {len(images)} images took: {(t_bg_remove_end - t_bg_remove_start):.3f} secs.")

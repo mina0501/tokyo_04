@@ -832,8 +832,8 @@ class TrellisVGGTTo3DPipeline(TrellisImageTo3DPipeline):
         # seed: int = 42,
         sparse_structure_sampler_params: dict = {},
         slat_sampler_params: dict = {},
-        formats: List[str] = ['mesh', 'gaussian'],
-        preprocess_image: bool = True,
+        formats: List[str] = ['gaussian'],
+        preprocess_image: bool = False,
         mode: Literal['stochastic', 'multidiffusion'] = 'stochastic',
     ):
 

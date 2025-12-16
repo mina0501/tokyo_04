@@ -53,6 +53,7 @@ class GaussianProcessor:
 
         outputs = self._image_to_3d_pipeline.run(
             image_no_bg,
+            num_samples=3,
             sparse_structure_sampler_params={
                 "steps": 8,
                 "cfg_strength": 5.75,

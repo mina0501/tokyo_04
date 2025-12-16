@@ -8,4 +8,3 @@ save_image: 0
 save_render: 0
 enhance_image: 1
 num_views: 0
-num_bg_remove: 1
