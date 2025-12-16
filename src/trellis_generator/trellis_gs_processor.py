@@ -53,6 +53,14 @@ class GaussianProcessor:
 
         outputs = self._image_to_3d_pipeline.run(
             image_no_bg,
+            sparse_structure_sampler_params={
+                "steps": 8,
+                "cfg_strength": 5.75,
+            },
+            slat_sampler_params={
+                "steps": 20,
+                "cfg_strength": 2.4,
+            },
         )
         self.gaussians = outputs["gaussian"][0]
 
@@ -74,6 +82,14 @@ class GaussianProcessor:
         outputs = self._image_to_3d_pipeline.run_multi_image(
             images_no_bg,
             mode=get_config("trellis_multi_mode"),
+            sparse_structure_sampler_params={
+                "steps": 8,
+                "cfg_strength": 5.75,
+            },
+            slat_sampler_params={
+                "steps": 20,
+                "cfg_strength": 2.4,
+            },
         )
         self.gaussians = outputs["gaussian"][0]
 
