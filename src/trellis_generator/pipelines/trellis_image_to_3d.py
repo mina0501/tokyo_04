@@ -258,6 +258,7 @@ class TrellisImageTo3DPipeline(Pipeline):
         # torch.manual_seed(seed)
 
         coords = self.sample_sparse_structure(cond, num_samples, sparse_structure_sampler_params)
+        coords = coords if num_samples == 1 else self.select_coords(coords, num_samples)
         slat = self.sample_slat(cond, coords, slat_sampler_params)
         return self.decode_slat(slat, formats)
 
@@ -347,9 +348,21 @@ class TrellisImageTo3DPipeline(Pipeline):
         ss_steps = {**self.sparse_structure_sampler_params, **sparse_structure_sampler_params}.get('steps')
         with self.inject_sampler_multi_image('sparse_structure_sampler', len(images), ss_steps, mode=mode):
             coords = self.sample_sparse_structure(cond, num_samples, sparse_structure_sampler_params)
-
+            coords = coords if num_samples == 1 else self.select_coords(coords, num_samples)
         slat_steps = {**self.slat_sampler_params, **slat_sampler_params}.get('steps')
         with self.inject_sampler_multi_image('slat_sampler', len(images), slat_steps, mode=mode):
             slat = self.sample_slat(cond, coords, slat_sampler_params)
 
         return self.decode_slat(slat, formats)
+
+    def select_coords(self, coords, num_samples):
+        """
+        Select n smallest sparse structures in terms of number of voxels
+        """
+        counts = coords[:,0].unique(return_counts=True)[-1]
+        selected_coords = sorted(coords[:,1:].split(tuple(counts.tolist())), key = lambda x: len(x))[:num_samples]
+        sizes = torch.tensor(tuple(len(coo) for coo in selected_coords))
+        selected_coords = torch.cat(selected_coords, dim=0)
+        indices = torch.arange(num_samples).repeat_interleave(sizes).unsqueeze(-1).to(selected_coords.device, selected_coords.dtype)
+        selected_coords = torch.cat((indices, selected_coords), dim=1)
+        return selected_coords

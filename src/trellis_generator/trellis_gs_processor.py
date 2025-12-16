@@ -82,6 +82,7 @@ class GaussianProcessor:
         outputs = self._image_to_3d_pipeline.run_multi_image(
             images_no_bg,
             mode=get_config("trellis_multi_mode"),
+            num_samples=3,
             sparse_structure_sampler_params={
                 "steps": 8,
                 "cfg_strength": 5.75,
